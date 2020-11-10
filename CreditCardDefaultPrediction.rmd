@@ -1,0 +1,145 @@
+---
+title: "CreditCardDefaultPrediction"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+#install.packages("dplyr")
+#install.packages("lattice")
+#install.packages("caret")
+#install.packages("DMwR")
+#install.packages("corrplot")
+library(dplyr)
+library(lattice)
+library(caret)
+library(DMwR)
+library(corrplot)
+```
+
+# Reading the csv file
+
+```{r}
+UCI_Credit_Card <- read.csv("UCI_Credit_Card.csv",sep=',',header=TRUE)
+glimpse(UCI_Credit_Card)
+```
+# Removing the column ID
+
+```{r}
+UCI_Credit_Card=UCI_Credit_Card%>% select(-ID)
+```
+# Checking for duplicates and removing them from final dataset
+
+```{r}
+dup_ids_CC<-filter(UCI_Credit_Card,duplicated(UCI_Credit_Card))
+UCI_Credit_Card<-distinct(UCI_Credit_Card)
+```
+# Removing the rows having all zero values for BILL_AMTx and PAY_AMTx variables
+
+```{r}
+UCI_Credit_Card<-UCI_Credit_Card %>% filter_at(vars(starts_with(c("BILL","PAY_AMT"))), any_vars(.!=0))
+```
+# Renaming the Target Variable as Default and checking the count of rows for defaults nd non defaults and their proportions.
+
+```{r}
+UCI_Credit_Card<-UCI_Credit_Card %>% rename(Default = default.payment.next.month)
+table(UCI_Credit_Card$Default)
+prop.table(table(UCI_Credit_Card$Default))
+```
+
+# Changing datatype of SEX, MARRAIGE and EDUCTAION to factor
+```{r}
+UCI_Credit_Card$SEX<-as.factor(UCI_Credit_Card$SEX)
+UCI_Credit_Card$EDUCATION<-as.factor(UCI_Credit_Card$EDUCATION)
+UCI_Credit_Card$MARRIAGE<-as.factor(UCI_Credit_Card$MARRIAGE)
+```
+# Changing the names of levels for SEX, MARRIAGE and EDUCATION variables
+
+```{r}
+levels(UCI_Credit_Card$SEX)[levels(UCI_Credit_Card$SEX)=="1"] <- "MALE"
+levels(UCI_Credit_Card$SEX)[levels(UCI_Credit_Card$SEX)=="2"] <- "FEMALE"
+levels(UCI_Credit_Card$MARRIAGE)[levels(UCI_Credit_Card$MARRIAGE)=="1"] <- "Married"
+levels(UCI_Credit_Card$MARRIAGE)[levels(UCI_Credit_Card$MARRIAGE)=="2"] <- "Single"
+levels(UCI_Credit_Card$MARRIAGE)[levels(UCI_Credit_Card$MARRIAGE)=="3"] <- "Others"
+levels(UCI_Credit_Card$MARRIAGE)[levels(UCI_Credit_Card$MARRIAGE)=="0"] <- "Divorced"
+levels(UCI_Credit_Card$EDUCATION)[levels(UCI_Credit_Card$EDUCATION)=="0"] <- "Others"
+levels(UCI_Credit_Card$EDUCATION)[levels(UCI_Credit_Card$EDUCATION)=="1"] <- "Graduate"
+levels(UCI_Credit_Card$EDUCATION)[levels(UCI_Credit_Card$EDUCATION)=="2"] <- "University"
+levels(UCI_Credit_Card$EDUCATION)[levels(UCI_Credit_Card$EDUCATION)=="3"] <- "High School"
+levels(UCI_Credit_Card$EDUCATION)[levels(UCI_Credit_Card$EDUCATION)=="4"] <- "Others"
+levels(UCI_Credit_Card$EDUCATION)[levels(UCI_Credit_Card$EDUCATION)=="5"] <- "Others"
+levels(UCI_Credit_Card$EDUCATION)[levels(UCI_Credit_Card$EDUCATION)=="6"] <- "Others"
+```
+
+# Plotting bar graphs for SEX, EDUCATION and EDUCTAION with respect to Default to know their relationship to target variable
+```{r}
+ggplot(UCI_Credit_Card,aes(x=SEX,fill=as.factor(Default)))+geom_bar()+facet_wrap(~as.factor(Default))+labs(fill="Default")
+ggplot(UCI_Credit_Card,aes(x=MARRIAGE,fill=as.factor(Default)))+geom_bar()+facet_wrap(~as.factor(Default))+labs(fill="Default")
+ggplot(UCI_Credit_Card,aes(x=EDUCATION,fill=as.factor(Default)))+geom_bar()+facet_wrap(~as.factor(Default))+labs(fill="Default")
+```
+
+# Creating Correlation matrix for all continous independent variables with target variable
+```{r}
+UCI_Credit_Card_cor<-UCI_Credit_Card %>% select(-SEX,-EDUCATION,-MARRIAGE)
+correlation_UCI_Credit_Card<-cor(UCI_Credit_Card_cor,method="pearson")
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(round(correlation_UCI_Credit_Card,1), method="color", col=col(200),  
+         type="full", order="hclust", 
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col="black", tl.srt=45, #Text label color and rotation
+         # Combine with significance
+         sig.level = 0.01, insig = "blank", 
+         # hide correlation coefficient on the principal diagonal
+         diag=TRUE 
+)
+```
+
+#Creating scatterplot and boxplot for LIMIT_BAL, to check for Outliers
+```{r}
+ggplot(UCI_Credit_Card,aes(x=LIMIT_BAL,y=AGE,color=Default))+geom_point(shape=18)
+ggplot(UCI_Credit_Card,aes(x=LIMIT_BAL))+geom_boxplot()
+```
+# Creating train and test set
+
+```{r}
+set.seed(1234)
+split_UCI_Credit_Card <- createDataPartition(UCI_Credit_Card$Default,p=0.80,list=FALSE,times=1)
+train_UCI_Credit_Card<-UCI_Credit_Card[split_UCI_Credit_Card,]
+test_UCI_Credit_Card<-UCI_Credit_Card[-split_UCI_Credit_Card,]
+```
+
+# Create histogram for Balance Limit for train set to check data is normalized or not
+```{r}
+ggplot(train_UCI_Credit_Card,aes(x=LIMIT_BAL))+geom_histogram(bins=60,aes(y=..density..), colour="black", fill="white")+
+  geom_density(alpha=.2, color="#FF6666")
+```
+# Standardization of train set
+
+```{r}
+train_UCI_Credit_Card$LIMIT_BAL<-scale(train_UCI_Credit_Card$LIMIT_BAL,center = TRUE, scale = TRUE)
+train_UCI_Credit_Card$AGE<-scale(train_UCI_Credit_Card$AGE,center = TRUE, scale = TRUE)
+```
+# Changing datatype of default variable to factor and applying SMOTE to balance the data
+
+```{r}
+train_UCI_Credit_Card$Default=as.factor(train_UCI_Credit_Card$Default)
+train_UCI_Credit_Card<-SMOTE(Default~.,train_UCI_Credit_Card,perc.over=200,k=10,perc.under = 180)
+```
+
+# Checking for row count and proportion for train dataset after SMOTE
+```{r}
+table(train_UCI_Credit_Card$Default)
+prop.table(table(train_UCI_Credit_Card$Default))
+```
+
