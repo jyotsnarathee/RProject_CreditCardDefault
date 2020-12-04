@@ -1,0 +1,277 @@
+---
+title: "UCI_CreditCard_PredictionModel"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+#install.packages("dplyr")
+#install.packages("lattice")
+#install.packages("caret")
+#install.packages("DMwR")
+#install.packages("corrplot")
+library(dplyr)
+library(lattice)
+library(caret)
+library(DMwR)
+library(corrplot)
+library(randomForest)
+library(yardstick)
+library(pROC)
+library(ROCR)
+library(InformationValue)
+```
+
+## Reading the csv file
+
+```{r}
+setwd("D:/UCI_Credit_Card.csv")
+UCI_Credit_Card <- read.csv("UCI_Credit_Card.csv",sep=',',header=TRUE)
+glimpse(UCI_Credit_Card)
+```
+# Removing the column ID
+```{r}
+UCI_Credit_Card=UCI_Credit_Card%>% select(-ID)
+```
+# Checking for duplicates and removing them from final dataset
+```{r}
+dup_ids_CC<-filter(UCI_Credit_Card,duplicated(UCI_Credit_Card))
+UCI_Credit_Card<-distinct(UCI_Credit_Card)
+```
+# Removing the rows having all zero values for BILL_AMTx and PAY_AMTx variables
+```{r}
+UCI_Credit_Card<-UCI_Credit_Card %>% filter_at(vars(starts_with(c("BILL","PAY_AMT"))), any_vars(.!=0))
+```
+# Renaming the Target Variable as Default and checking the count of rows for defaults nd non defaults and their proportions.
+```{r}
+UCI_Credit_Card<-UCI_Credit_Card %>% rename(Default = default.payment.next.month)
+table(UCI_Credit_Card$Default)
+prop.table(table(UCI_Credit_Card$Default))
+```
+# Changing datatype of SEX, MARRAIGE and EDUCTAION to factor
+```{r}
+UCI_Credit_Card$SEX<-as.factor(UCI_Credit_Card$SEX)
+UCI_Credit_Card$EDUCATION<-as.factor(UCI_Credit_Card$EDUCATION)
+UCI_Credit_Card$MARRIAGE<-as.factor(UCI_Credit_Card$MARRIAGE)
+```
+# Changing the names of levels for SEX, MARRIAGE and EDUCATION variables
+
+```{r}
+levels(UCI_Credit_Card$SEX)[levels(UCI_Credit_Card$SEX)=="1"] <- "MALE"
+levels(UCI_Credit_Card$SEX)[levels(UCI_Credit_Card$SEX)=="2"] <- "FEMALE"
+levels(UCI_Credit_Card$MARRIAGE)[levels(UCI_Credit_Card$MARRIAGE)=="1"] <- "Married"
+levels(UCI_Credit_Card$MARRIAGE)[levels(UCI_Credit_Card$MARRIAGE)=="2"] <- "Single"
+levels(UCI_Credit_Card$MARRIAGE)[levels(UCI_Credit_Card$MARRIAGE)=="3"] <- "Others"
+levels(UCI_Credit_Card$MARRIAGE)[levels(UCI_Credit_Card$MARRIAGE)=="0"] <- "Divorced"
+levels(UCI_Credit_Card$EDUCATION)[levels(UCI_Credit_Card$EDUCATION)=="0"] <- "Others"
+levels(UCI_Credit_Card$EDUCATION)[levels(UCI_Credit_Card$EDUCATION)=="1"] <- "Graduate"
+levels(UCI_Credit_Card$EDUCATION)[levels(UCI_Credit_Card$EDUCATION)=="2"] <- "University"
+levels(UCI_Credit_Card$EDUCATION)[levels(UCI_Credit_Card$EDUCATION)=="3"] <- "High School"
+levels(UCI_Credit_Card$EDUCATION)[levels(UCI_Credit_Card$EDUCATION)=="4"] <- "Others"
+levels(UCI_Credit_Card$EDUCATION)[levels(UCI_Credit_Card$EDUCATION)=="5"] <- "Others"
+levels(UCI_Credit_Card$EDUCATION)[levels(UCI_Credit_Card$EDUCATION)=="6"] <- "Others"
+```
+
+# Plotting bar graphs for SEX, EDUCATION and EDUCTAION with respect to Default to know their relationship to target variable
+```{r}
+ggplot(UCI_Credit_Card,aes(x=SEX,fill=as.factor(Default)))+geom_bar()+facet_wrap(~as.factor(Default))+labs(fill="Default")
+ggplot(UCI_Credit_Card,aes(x=MARRIAGE,fill=as.factor(Default)))+geom_bar()+facet_wrap(~as.factor(Default))+labs(fill="Default")
+ggplot(UCI_Credit_Card,aes(x=EDUCATION,fill=as.factor(Default)))+geom_bar()+facet_wrap(~as.factor(Default))+labs(fill="Default")
+```
+
+# Creating Correlation matrix for all continous independent variables with target variable
+```{r}
+UCI_Credit_Card_cor<-UCI_Credit_Card %>% select(-SEX,-EDUCATION,-MARRIAGE)
+correlation_UCI_Credit_Card<-cor(UCI_Credit_Card_cor,method="pearson")
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(round(correlation_UCI_Credit_Card,1), method="color", col=col(200),  
+         type="full", order="hclust", 
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col="black", tl.srt=45, #Text label color and rotation
+         # Combine with significance
+         sig.level = 0.01, insig = "blank", 
+         # hide correlation coefficient on the principal diagonal
+         diag=TRUE 
+)
+```
+# Creating scatterplot and boxplot for LIMIT_BAL, to check for Outliers
+```{r}
+ggplot(UCI_Credit_Card,aes(x=LIMIT_BAL,y=AGE,color=Default))+geom_point(shape=18)
+ggplot(UCI_Credit_Card,aes(x=LIMIT_BAL))+geom_boxplot()
+```
+# Creating train and test set and create a copy of the train set to use that for Logistic Regression
+
+```{r}
+
+set.seed(1234)
+split_UCI_Credit_Card <- createDataPartition(UCI_Credit_Card$Default,p=0.80,list=FALSE,times=1)
+train_UCI_Credit_Card<-UCI_Credit_Card[split_UCI_Credit_Card,]
+test_UCI_Credit_Card<-UCI_Credit_Card[-split_UCI_Credit_Card,]
+train_UCI_Credit_Card_LR<- train_UCI_Credit_Card
+```
+# Create histogram for Balance Limit for train set to check data is normalized or not
+```{r}
+ggplot(train_UCI_Credit_Card,aes(x=LIMIT_BAL))+geom_histogram(bins=60,aes(y=..density..), colour="black", fill="white")+
+  geom_density(alpha=.2, color="#FF6666")
+```
+# Changing datatype of default variable to factor and created random forest before applying SMOTE to check if the performance will increase after SMOTE or not.
+```{r}
+train_UCI_Credit_Card$Default=as.factor(train_UCI_Credit_Card$Default)
+library(randomForest)
+set.seed(71)
+rf <-randomForest(Default~.,data=train_UCI_Credit_Card, ntree=500) 
+print(rf)
+```
+# Checking for AUC for the Random Forest model created before SMOTE
+```{r}
+predictors <- names(train_UCI_Credit_Card)[names(train_UCI_Credit_Card)!='Default']
+test_UCI_Credit_Card1<-test_UCI_Credit_Card[,predictors]
+pred=(predict(rf,test_UCI_Credit_Card1,type='class'))
+auc = roc( test_UCI_Credit_Card$Default,as.numeric(pred))
+auc
+```
+# Applying SMOTE to train set for Random Forest
+```{r}
+train_UCI_Credit_Card<-SMOTE(Default~.,train_UCI_Credit_Card,perc.over=200,k=10,perc.under = 180)
+```
+# Checking for row count and proportion for train dataset after SMOTE for Random Forest
+```{r}
+table(train_UCI_Credit_Card$Default)
+prop.table(table(train_UCI_Credit_Card$Default))
+```
+# Creating Random Forest model again with SMOTE applied train dataset and checking for AUC.
+```{r}
+set.seed(71)
+rf <-randomForest(Default~.,data=train_UCI_Credit_Card, ntree=500) 
+print(rf)
+pred=(predict(rf,test_UCI_Credit_Card1,type='class'))
+auc = roc( test_UCI_Credit_Card$Default,as.numeric(pred))
+auc
+```
+# Finding best value for hyperparameter .mtry  
+```{r}
+mtry <- tuneRF(train_UCI_Credit_Card[-24],train_UCI_Credit_Card$Default, ntreeTry=500,
+               stepFactor=1.5, trace=TRUE, plot=TRUE)
+best.m <- mtry[mtry[, 2] == min(mtry[, 2]), 1]
+print(mtry)
+print(best.m)
+```
+# Training the RandomForest model with hyperparameters and 10-fold cross validation.
+```{r}
+set.seed(71)
+# Define the control
+trControl <- trainControl(method = "cv",
+    number = 10,
+    search = "grid")
+rf <-randomForest(Default~.,data=train_UCI_Credit_Card, mtry=best.m, importance=TRUE,ntree=500,trControl=trControl)
+summary(rf)
+print(rf)
+importance(rf)
+varImpPlot(rf)
+```
+# Finding the performance metrics for Random Forest Model on test set.
+```{r}
+pred=(predict(rf,test_UCI_Credit_Card1,type='class',ordered=TRUE))
+auc = roc( test_UCI_Credit_Card$Default,as.numeric(pred))
+auc
+#Creating ConfusionMatrix for test set to get the accuracy value
+caret::confusionMatrix(pred,as.factor(test_UCI_Credit_Card$Default))
+#Finding Precision, Recall, F-Measure and Accuracy value
+df_pred = data.frame(pred, DefaultRate=test_UCI_Credit_Card$Default)
+glimpse(df_pred)
+yardstick::sensitivity(data=df_pred,estimate=as.factor(pred),truth=as.factor(DefaultRate))
+yardstick::precision(data=df_pred,estimate=as.factor(pred),truth=as.factor(DefaultRate))
+yardstick::f_meas(data=df_pred,estimate=as.factor(pred),truth=as.factor(DefaultRate))
+```
+# Changing datatype of default variable to factor and created logistic regression before applying SMOTE to check if the performance will increase after SMOTE or not.
+```{r}
+train_UCI_Credit_Card_LR$Default=as.factor(train_UCI_Credit_Card_LR$Default)
+set.seed(71)
+glm_model <-glm(Default~.,data=train_UCI_Credit_Card_LR,family="binomial") 
+summary(glm_model)
+```
+# Checking for AUC for the model created before SMOTE for Logistic Regression
+```{r}
+predictors <- names(train_UCI_Credit_Card_LR)[names(train_UCI_Credit_Card_LR)!='Default']
+test_UCI_Credit_Card1<-test_UCI_Credit_Card[,predictors]
+pred_LR=round(predict(glm_model,test_UCI_Credit_Card1,type='response'))
+auc = roc( test_UCI_Credit_Card$Default,as.numeric(pred_LR))
+auc
+```
+# Applying SMOTE to train set for Logistic Regression
+```{r}
+train_UCI_Credit_Card_LR<-SMOTE(Default~.,train_UCI_Credit_Card_LR,perc.over=200,k=10,perc.under = 180)
+```
+# Checking for row count and proportion for train dataset for Logistic Regression after SMOTE
+```{r}
+table(train_UCI_Credit_Card_LR$Default)
+prop.table(table(train_UCI_Credit_Card_LR$Default))
+```
+# Creating Logistic Regression model again with SMOTE applied train dataset and checking for AUC.
+```{r}
+set.seed(71)
+glm_model <-glm(Default~.,data=train_UCI_Credit_Card_LR,family="binomial") 
+summary(glm_model)
+pred_LR=round(predict(glm_model,test_UCI_Credit_Card1,type='response'))
+auc = roc( test_UCI_Credit_Card$Default,as.numeric(pred_LR))
+auc
+```
+# Training the RandomForest model with hyperparameters and 10-fold cross validation.
+```{r}
+# Define the control
+trControl <- trainControl(method = "cv",
+    number = 10,
+    search = "grid")
+set.seed(1234)
+tuneGrid=expand.grid(parameter=0.001)
+glm1 <- train(Default~.,
+    data = train_UCI_Credit_Card_LR,
+    method = "glm",
+    family='binomial',
+    tuneGrid=tuneGrid,
+    trControl=trControl,
+    metric = "Accuracy")
+summary(glm1)   
+print(glm1)
+```
+# Finding the performance metrics for Logistic Regression Model on test set. 
+```{r}
+pred_LR=round(predict(glm1,test_UCI_Credit_Card1,type='prob'))
+test_LR<- data.frame(D =test_UCI_Credit_Card$Default, pred_LR)
+auc_LR<-roc(test_LR$D,test_LR$X1)
+auc_LR
+#Creating ConfusionMatrix for test set to get the accuracy value
+caret::confusionMatrix(as.factor(test_LR$X1),as.factor(test_LR$D))
+#Finding Precision, Recall, F-Measure and Accuracy value
+yardstick::sensitivity(data=test_LR,estimate=as.factor(test_LR$X1),truth=as.factor(D))
+yardstick::precision(data=test_LR,estimate=as.factor(test_LR$X1),truth=as.factor(D))
+yardstick::f_meas(data=test_LR,estimate=as.factor(test_LR$X1),truth=as.factor(D))
+```
+# Creating ROC Curves for Random Forest and Logistic Regression. We will predicting models again here with type 'probability' so that we get a smooth ROC curve. With type 'class', the curve will be having just two classes and the curve will be a pointy one.
+```{r}
+pred_RF<- predict(rf, test_UCI_Credit_Card1,type='prob')
+test_RF<- data.frame(D =test_UCI_Credit_Card$Default, pred_RF)
+auc_RF<-roc(test_RF$D,test_RF$X1)
+pred_LR1=predict(glm1,test_UCI_Credit_Card1,type='prob')
+test_LR1<- data.frame(D =test_UCI_Credit_Card$Default, pred_LR1)
+auc_LR1<-roc(test_LR1$D,test_LR1$X1)
+# Creating ROC Curve for Logistic Regression and Random Forest
+plot(auc_RF,main="ROC Curve",col=2,lwd=2)
+plot(auc_LR1,col=4,lwd=2,add=TRUE)
+legend(1, 1, legend=c("AUC_RF", "AUC_LR"),
+       col=c("red", "blue"), lty=1:2, cex=0.8)
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
